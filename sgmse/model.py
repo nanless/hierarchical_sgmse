@@ -105,13 +105,13 @@ class ScoreModel(pl.LightningModule):
         return loss
 
     def _step(self, batch, batch_idx):
-        x, y = batch
+        x, y, c = batch
         t = torch.rand(x.shape[0], device=x.device) * (self.sde.T - self.t_eps) + self.t_eps
         mean, std = self.sde.marginal_prob(x, t, y)
         z = torch.randn_like(x)  # i.i.d. normal distributed with var=0.5
         sigmas = std[:, None, None, None]
         perturbed_data = mean + sigmas * z
-        score = self(perturbed_data, t, y)
+        score = self(perturbed_data, t, c)
         err = score * sigmas + z
         loss = self._loss(err)
         return loss
@@ -134,9 +134,9 @@ class ScoreModel(pl.LightningModule):
 
         return loss
 
-    def forward(self, x, t, y):
+    def forward(self, x, t, c):
         # Concatenate y as an extra channel
-        dnn_input = torch.cat([x, y], dim=1)
+        dnn_input = torch.cat([x, c], dim=1)
         
         # the minus is most likely unimportant here - taken from Song's repo
         score = -self.dnn(dnn_input, t)
@@ -147,21 +147,22 @@ class ScoreModel(pl.LightningModule):
         self.ema.to(*args, **kwargs)
         return super().to(*args, **kwargs)
 
-    def get_pc_sampler(self, predictor_name, corrector_name, y, N=None, minibatch=None, **kwargs):
+    def get_pc_sampler(self, predictor_name, corrector_name, y, c, N=None, minibatch=None, **kwargs):
         N = self.sde.N if N is None else N
         sde = self.sde.copy()
         sde.N = N
 
         kwargs = {"eps": self.t_eps, **kwargs}
         if minibatch is None:
-            return sampling.get_pc_sampler(predictor_name, corrector_name, sde=sde, score_fn=self, y=y, **kwargs)
+            return sampling.get_pc_sampler(predictor_name, corrector_name, sde=sde, score_fn=self, y=y, c=c, **kwargs)
         else:
             M = y.shape[0]
             def batched_sampling_fn():
                 samples, ns = [], []
                 for i in range(int(ceil(M / minibatch))):
                     y_mini = y[i*minibatch:(i+1)*minibatch]
-                    sampler = sampling.get_pc_sampler(predictor_name, corrector_name, sde=sde, score_fn=self, y=y_mini, **kwargs)
+                    c_mini = c[i*minibatch:(i+1)*minibatch]
+                    sampler = sampling.get_pc_sampler(predictor_name, corrector_name, sde=sde, score_fn=self, y=y_mini, c=c_mini, **kwargs)
                     sample, n = sampler()
                     samples.append(sample)
                     ns.append(n)
@@ -218,7 +219,7 @@ class ScoreModel(pl.LightningModule):
     def _istft(self, spec, length=None):
         return self.data_module.istft(spec, length)
 
-    def enhance(self, y, sampler_type="pc", predictor="reverse_diffusion",
+    def enhance(self, y, c, sampler_type="pc", predictor="reverse_diffusion",
         corrector="ald", N=30, corrector_steps=1, snr=0.5, timeit=False,
         **kwargs
     ):
@@ -230,10 +231,13 @@ class ScoreModel(pl.LightningModule):
         T_orig = y.size(1) 
         norm_factor = y.abs().max().item()
         y = y / norm_factor
+        c = c / norm_factor
         Y = torch.unsqueeze(self._forward_transform(self._stft(y.cuda())), 0)
         Y = pad_spec(Y)
+        C = torch.unsqueeze(self._forward_transform(self._stft(c.cuda())), 0)
+        C = pad_spec(C)
         if sampler_type == "pc":
-            sampler = self.get_pc_sampler(predictor, corrector, Y.cuda(), N=N, 
+            sampler = self.get_pc_sampler(predictor, corrector, Y.cuda(), C.cuda(), N=N, 
                 corrector_steps=corrector_steps, snr=snr, intermediate=False,
                 **kwargs)
         elif sampler_type == "ode":

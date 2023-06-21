@@ -69,7 +69,7 @@ class SDE(abc.ABC):
         """
         pass
 
-    def discretize(self, x, t, *args):
+    def discretize(self, x, t, y):
         """Discretize the SDE in the form: x_{i+1} = x_i + f_i(x_i) + G_i z_i.
 
         Useful for reverse diffusion sampling and probabiliy flow sampling.
@@ -83,7 +83,7 @@ class SDE(abc.ABC):
             f, G
         """
         dt = 1 / self.N
-        drift, diffusion = self.sde(x, t, *args)
+        drift, diffusion = self.sde(x, t, y)
         f = drift * dt
         G = diffusion * torch.sqrt(torch.tensor(dt, device=t.device))
         return f, G
@@ -110,15 +110,15 @@ class SDE(abc.ABC):
             def T(self):
                 return T
 
-            def sde(self, x, t, *args):
+            def sde(self, x, t, y, c):
                 """Create the drift and diffusion functions for the reverse SDE/ODE."""
-                rsde_parts = self.rsde_parts(x, t, *args)
+                rsde_parts = self.rsde_parts(x, t, y, c)
                 total_drift, diffusion = rsde_parts["total_drift"], rsde_parts["diffusion"]
                 return total_drift, diffusion
 
-            def rsde_parts(self, x, t, *args):
-                sde_drift, sde_diffusion = sde_fn(x, t, *args)
-                score = score_model(x, t, *args)
+            def rsde_parts(self, x, t, y, c):
+                sde_drift, sde_diffusion = sde_fn(x, t, y)
+                score = score_model(x, t, c)
                 score_drift = -sde_diffusion[:, None, None, None]**2 * score * (0.5 if self.probability_flow else 1.)
                 diffusion = torch.zeros_like(sde_diffusion) if self.probability_flow else sde_diffusion
                 total_drift = sde_drift + score_drift
@@ -127,10 +127,10 @@ class SDE(abc.ABC):
                     'sde_diffusion': sde_diffusion, 'score_drift': score_drift, 'score': score,
                 }
 
-            def discretize(self, x, t, *args):
+            def discretize(self, x, t, y, c):
                 """Create discretized iteration rules for the reverse diffusion sampler."""
-                f, G = discretize_fn(x, t, *args)
-                rev_f = f - G[:, None, None, None] ** 2 * score_model(x, t, *args) * (0.5 if self.probability_flow else 1.)
+                f, G = discretize_fn(x, t, y)
+                rev_f = f - G[:, None, None, None] ** 2 * score_model(x, t, c) * (0.5 if self.probability_flow else 1.)
                 rev_G = torch.zeros_like(G) if self.probability_flow else G
                 return rev_f, rev_G
 

@@ -12,7 +12,7 @@ from sgmse.util.other import ensure_dir, pad_spec
 
 if __name__ == '__main__':
     parser = ArgumentParser()
-    parser.add_argument("--test_dir", type=str, required=True, help='Directory containing the test data (must have subdirectory noisy/)')
+    parser.add_argument("--test_dir", type=str, required=True, help='Directory containing the test data (must have subdirectory noisy/ and condition/)')
     parser.add_argument("--enhanced_dir", type=str, required=True, help='Directory containing the enhanced data')
     parser.add_argument("--ckpt", type=str,  help='Path to model checkpoint.')
     parser.add_argument("--corrector", type=str, choices=("ald", "langevin", "none"), default="ald", help="Corrector class for the PC sampler.")
@@ -22,6 +22,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     noisy_dir = join(args.test_dir, 'noisy/')
+    condition_dir = join(args.test_dir, 'condition/')
     checkpoint_file = args.ckpt
     corrector_cls = args.corrector
 
@@ -40,25 +41,30 @@ if __name__ == '__main__':
     model.cuda()
 
     noisy_files = sorted(glob.glob('{}/*.wav'.format(noisy_dir)))
+    condition_files = sorted(glob.glob('{}/*.wav'.format(condition_dir)))
 
-    for noisy_file in tqdm(noisy_files):
+    for noisy_file, condition_file in tqdm(zip(noisy_files, condition_files)):
         filename = noisy_file.split('/')[-1]
         
         # Load wav
         y, _ = load(noisy_file) 
-        T_orig = y.size(1)   
+        T_orig = y.size(1)
+        c, _ = load(condition_file)   
 
         # Normalize
         norm_factor = y.abs().max()
         y = y / norm_factor
+        c = c / norm_factor
         
         # Prepare DNN input
         Y = torch.unsqueeze(model._forward_transform(model._stft(y.cuda())), 0)
         Y = pad_spec(Y)
+        C = torch.unsqueeze(model._forward_transform(model._stft(c.cuda())), 0)
+        C = pad_spec(C)
         
         # Reverse sampling
         sampler = model.get_pc_sampler(
-            'reverse_diffusion', corrector_cls, Y.cuda(), N=N, 
+            'reverse_diffusion', corrector_cls, Y.cuda(), C.cuda(), N=N, 
             corrector_steps=corrector_steps, snr=snr)
         sample, _ = sampler()
         

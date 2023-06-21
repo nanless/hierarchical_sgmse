@@ -17,35 +17,43 @@ def evaluate_model(model, num_eval_files):
 
     clean_files = model.data_module.valid_set.clean_files
     noisy_files = model.data_module.valid_set.noisy_files
+    condition_files = model.data_module.valid_set.condition_files
     
     # Select test files uniformly accros validation files
     total_num_files = len(clean_files)
     indices = torch.linspace(0, total_num_files-1, num_eval_files, dtype=torch.int)
     clean_files = list(clean_files[i] for i in indices)
     noisy_files = list(noisy_files[i] for i in indices)
+    condition_files = list(condition_files[i] for i in indices)
 
     _pesq = 0
     _si_sdr = 0
     _estoi = 0
     # iterate over files
-    for (clean_file, noisy_file) in zip(clean_files, noisy_files):
+    for (clean_file, noisy_file, condition_file) in zip(clean_files, noisy_files, condition_files):
         # Load wavs
         x, _ = load(clean_file)
-        y, _ = load(noisy_file) 
+        y, _ = load(noisy_file)
+        c, _ = load(condition_file) 
         T_orig = x.size(1)   
 
         # Normalize per utterance
         norm_factor = y.abs().max()
         y = y / norm_factor
+        c = c / norm_factor
 
         # Prepare DNN input
         Y = torch.unsqueeze(model._forward_transform(model._stft(y.cuda())), 0)
         Y = pad_spec(Y)
+        C = torch.unsqueeze(model._forward_transform(model._stft(c.cuda())), 0)
+        C = pad_spec(C)
+
         y = y * norm_factor
+        c = c * norm_factor
 
         # Reverse sampling
         sampler = model.get_pc_sampler(
-            'reverse_diffusion', 'ald', Y.cuda(), N=N, 
+            'reverse_diffusion', 'ald', Y.cuda(), C.cuda(), N=N, 
             corrector_steps=corrector_steps, snr=snr)
         sample, _ = sampler()
 
@@ -55,6 +63,7 @@ def evaluate_model(model, num_eval_files):
         x_hat = x_hat.squeeze().cpu().numpy()
         x = x.squeeze().cpu().numpy()
         y = y.squeeze().cpu().numpy()
+        c = c.squeeze().cpu().numpy()
 
         _si_sdr += si_sdr(x, x_hat)
         _pesq += pesq(sr, x, x_hat, 'wb') 

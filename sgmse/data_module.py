@@ -28,6 +28,7 @@ class Specs(Dataset):
         if format == "default":
             self.clean_files = sorted(glob(join(data_dir, subset) + '/clean/*.wav'))
             self.noisy_files = sorted(glob(join(data_dir, subset) + '/noisy/*.wav'))
+            self.condition_files = sorted(glob(join(data_dir, subset) + '/condition/*.wav'))
         else:
             # Feel free to add your own directory format
             raise NotImplementedError(f"Directory format {format} unknown!")
@@ -46,6 +47,7 @@ class Specs(Dataset):
     def __getitem__(self, i):
         x, _ = load(self.clean_files[i])
         y, _ = load(self.noisy_files[i])
+        c, _ = load(self.condition_files[i])
 
         # formula applies for center=True
         target_len = (self.num_frames - 1) * self.hop_length
@@ -59,10 +61,12 @@ class Specs(Dataset):
                 start = int((current_len-target_len)/2)
             x = x[..., start:start+target_len]
             y = y[..., start:start+target_len]
+            c = c[..., start:start+target_len]
         else:
             # pad audio if the length T is smaller than num_frames
             x = F.pad(x, (pad//2, pad//2+(pad%2)), mode='constant')
             y = F.pad(y, (pad//2, pad//2+(pad%2)), mode='constant')
+            c = F.pad(c, (pad//2, pad//2+(pad%2)), mode='constant')
 
         # normalize w.r.t to the noisy or the clean signal or not at all
         # to ensure same clean signal power in x and y.
@@ -74,12 +78,14 @@ class Specs(Dataset):
             normfac = 1.0
         x = x / normfac
         y = y / normfac
+        c = c / normfac
 
         X = torch.stft(x, **self.stft_kwargs)
         Y = torch.stft(y, **self.stft_kwargs)
+        C = torch.stft(c, **self.stft_kwargs)
 
-        X, Y = self.spec_transform(X), self.spec_transform(Y)
-        return X, Y
+        X, Y, C = self.spec_transform(X), self.spec_transform(Y), self.spec_transform(C)
+        return X, Y, C
 
     def __len__(self):
         if self.dummy:
@@ -92,7 +98,7 @@ class Specs(Dataset):
 class SpecsDataModule(pl.LightningDataModule):
     @staticmethod
     def add_argparse_args(parser):
-        parser.add_argument("--base_dir", type=str, required=True, help="The base directory of the dataset. Should contain `train`, `valid` and `test` subdirectories, each of which contain `clean` and `noisy` subdirectories.")
+        parser.add_argument("--base_dir", type=str, required=True, help="The base directory of the dataset. Should contain `train`, `valid` and `test` subdirectories, each of which contain `clean` , `noisy` and `condition` subdirectories.")
         parser.add_argument("--format", type=str, choices=("default", "dns"), default="default", help="Read file paths according to file naming format.")
         parser.add_argument("--batch_size", type=int, default=8, help="The batch size. 8 by default.")
         parser.add_argument("--n_fft", type=int, default=510, help="Number of FFT bins. 510 by default.")   # to assure 256 freq bins
